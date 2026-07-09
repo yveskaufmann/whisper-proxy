@@ -24,15 +24,20 @@ endif
 LDFLAGS     := -ldflags "-X $(MODULE_NAME)/$(PROXY_MAIN_PKG)/cmd.Version=$(VERSION) \
                          -X $(MODULE_NAME)/$(PROXY_MAIN_PKG)/cmd.Commit=$(COMMIT) \
                          -X $(MODULE_NAME)/$(PROXY_MAIN_PKG)/cmd.BuildTime=$(BUILD_TIME)"
+						 
+# Setup whisper.cpp binding
+C_INCLUDE_PATH:=$(abspath third_party/whisper.cpp/include):$(abspath third_party/whisper.cpp/ggml/include)
+LIBRARY_PATH:=$(abspath third_party/whisper.cpp/build/bin) 
+BINDING_FLAGS = C_INCLUDE_PATH=$(C_INCLUDE_PATH) LIBRARY_PATH=$(LIBRARY_PATH) LD_LIBRARY_PATH=$(LIBRARY_PATH)
 
 .PHONY: run
 run:
-	@go run $(LDFLAGS) $(PROXY_MAIN_PATH) $(ARGS)
+	@$(BINDING_FLAGS) go run $(LDFLAGS) $(PROXY_MAIN_PATH) $(ARGS)
 
 .PHONY: build
 build:
 	@mkdir -p $(dir $(PROXY_BINARY))
-	@go build $(LDFLAGS) -o $(PROXY_BINARY) $(PROXY_MAIN_PATH) $(ARGS)
+	@$(BINDING_FLAGS) go build $(LDFLAGS) -o $(PROXY_BINARY) $(PROXY_MAIN_PATH) $(ARGS)
 
 .PHONY: tidy
 tidy:

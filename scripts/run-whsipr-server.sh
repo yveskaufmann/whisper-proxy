@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 
+
 LOCAL_PORT=18080
 LOCAL_MODELS="$HOME/.config/whisper-server/models"
 MODEL_TO_USE="/models/ggml-large-v3-turbo.bin"

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"com.yv35.whisper-server-proxy/internal/middleware"
+	"com.yv35.whisper-server-proxy/internal/transcribe"
 )
 
 type Options struct {
@@ -19,6 +20,10 @@ type Options struct {
 
 	// BackendURL is the URL of the backend service to which the proxy will forward requests.
 	WhisperURL string `json:"whisper_url"`
+
+	// The transcriber implementation to use for processing audio. If not set, the the whisper-server will be used.
+	AudioTranscriber transcribe.AudioTranscriber	 
+
 }
 
 type Proxy struct {
@@ -73,9 +78,18 @@ func (p *Proxy) Start() error {
 }
 
 func (p *Proxy) Stop() error {
+
 	if p.server != nil {
 		log.Printf("Stopping server on http://localhost:%d", p.Options.Port)
 		return p.server.Close()
 	}
+
+	if p.Options.AudioTranscriber != nil {
+		if err := p.Options.AudioTranscriber.Close(); err != nil {
+			log.Printf("Failed to stop AudioTranscriber: %v ", err)
+		}
+		p.Options.AudioTranscriber = nil
+	}
+
 	return nil
 }

@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +8,10 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
+
+	"github.com/go-audio/wav"
 )
 
 const MAX_MULTIPART_MEMORY = 10 << 20 // 10 MB
@@ -38,30 +41,15 @@ func newTranscribeHandler(o *Options) http.HandlerFunc {
 
 		log.Printf("Received transcription request with stream: %s, file: %s", stream, fileHeader.Filename)
 
-		// for key, values := range r.Form {
-		// 	log.Printf("Form field: %s, Values: %v", key, values)
-		// }
-
-		// for key, values := range r.Header {
-		// 	log.Printf("Header field: %s = %v", key, values)
-		// }
-
-		var originalBytes bytes.Buffer
-		if _, err := io.Copy(&originalBytes, file); err != nil {
-			log.Printf("Error reading original file bytes: %v", err)
-			http.Error(w, "Failed to read original file data", http.StatusInternalServerError)
-			return
-		}
-
-		log.Println("Translating audio format via ffmpeg to 16kHz WAV...")
-		wavBytes, err := convertWebmToWav(originalBytes.Bytes())
+		waveFile, err := convertWebmToWav(file); 
 		if err != nil {
 			log.Printf("FFmpeg conversion failed: %v", err)
-			http.Error(w, "Failed to decode/convert audio data", http.StatusInternalServerError)
+			http.Error(w, "FFmpeg conversion failed", http.StatusInternalServerError)
 			return
 		}
+		defer waveFile.Close()
 
-		whisperResult, err := invokeTranscriptionService(w, wavBytes, o)
+		whisperResult, err := invokeTranscriptionService(w, waveFile, o)
 		if err != nil {
 			log.Printf("failed to invoke transcription service: %v", err)
 
@@ -85,30 +73,88 @@ func newTranscribeHandler(o *Options) http.HandlerFunc {
 	}
 }
 
-func invokeTranscriptionService(w http.ResponseWriter, wavBytes []byte, o *Options) (*TranscriptionResult, error) {
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
+func invokeTranscriptionService(w http.ResponseWriter, wavReader *os.File, o *Options) (*TranscriptionResult, error) {
+	
+	defer wavReader.Close()
 
-	part, err := writer.CreateFormFile("file", "audio.wav")
-	if err != nil {
-		return nil, fmt.Errorf("Failed to create multipart form file entry: %w", err)		
+	if o.AudioTranscriber != nil {
+		decoder := wav.NewDecoder(wavReader)
+		if !decoder.IsValidFile() {
+			return nil, fmt.Errorf("invalid WAV file")
+		}
+
+		bitDepth := decoder.BitDepth
+		channels := decoder.NumChans
+		
+		log.Printf("WAV file info: BitDepth=%d, Channels=%d, len=%d", bitDepth, channels, decoder.PCMLen())
+		
+		if channels != 1 {
+			return nil, fmt.Errorf("only mono WAV files are supported, but got %d channels", channels)
+		}
+
+		buffer, err := decoder.FullPCMBuffer()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(buffer.Data) == 0 {
+			log.Printf("WARNING: audio file conversation results into 0 samples, returning empty transcription result")
+			return &TranscriptionResult{
+				Text:       "",
+				StatusCode: http.StatusOK,
+			}, nil
+		}
+
+		samples := make([]float32, len(buffer.Data))
+		for i, sample := range buffer.Data {
+			samples[i] = float32(sample) / float32(int(1)<<(bitDepth-1))
+		}
+
+		segments, err := o.AudioTranscriber.ProcessAudio(samples)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process audio: %w", err)
+		}
+
+		text := strings.Join(segments, "")
+		log.Printf("Received raw transcribe response: %s", text)
+
+		return &TranscriptionResult{
+			Text:       text,
+			StatusCode: http.StatusOK,
+		}, nil	
 	}
-
-	if _, err := io.Copy(part, bytes.NewReader(wavBytes)); err != nil {
-		return nil, fmt.Errorf("Failed to copy audio to multipart form file: %w", err)
-	}
-
-	if err := writer.WriteField("response-format", "json"); err != nil {
-		return nil, fmt.Errorf("Failed to set form field response-format: %w", err)
-	}
-	writer.Close()
-
+	
 	inferenceURL, err := url.JoinPath(o.WhisperURL, "inference")
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create inference URL [baseURL=%q path=%q]: %w", o.WhisperURL, "inference", err)
 	}
+	
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
 
-	req, err := http.NewRequest("POST", inferenceURL, body)
+	go func() { 
+		defer pw.Close()
+		defer writer.Close()
+
+		filePart, err := writer.CreateFormFile("file", "audio.wav")
+		if err != nil {
+			pw.CloseWithError(fmt.Errorf("Failed to create multipart form file entry: %w", err))
+			return
+		}
+
+		if _, err := io.Copy(filePart, wavReader); err != nil {
+			pw.CloseWithError(fmt.Errorf("Failed to copy audio to multipart form file: %w", err))
+			return
+		}
+
+		if err := writer.WriteField("response-format", "json"); err != nil {
+			pw.CloseWithError(fmt.Errorf("Failed to set form field response-format: %w", err))
+			return
+		}
+	}()
+
+
+	req, err := http.NewRequest("POST", inferenceURL, pr)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create transcribe request to backend: %w", err)
 	}

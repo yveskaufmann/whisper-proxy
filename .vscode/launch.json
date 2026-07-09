@@ -12,6 +12,16 @@
             "mode": "auto",
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/cmd/whisper-proxy/main.go",
+            
+            "env": {
+                "C_INCLUDE_PATH": "${workspaceFolder}/third_party/whisper.cpp/include:${workspaceFolder}/third_party/whisper.cpp/ggml/include",
+                "LIBRARY_PATH": "${workspaceFolder}/third_party/whisper.cpp/build/bin", 
+                "LD_LIBRARY_PATH": "${workspaceFolder}/third_party/whisper.cpp/build/bin",
+            },
+            "args": [
+                "-m", 
+                "$HOME/.config/whisper-server/models/ggml-large-v3-turbo.bin"
+            ]
         }
     ]
 }

@@ -2,13 +2,26 @@ services:
   whisper-proxy:
     build: .
     restart: unless-stopped
-    command: ["--port", "8080", "--whisper-url", "http://whisper-backend:18080"]
+    command: [
+        "--port",
+        "8080",
+        # "--whisper-url",
+        # "http://whisper-backend:18080",
+        "-m",
+        "/models/ggml-large-v3-turbo.bin",
+      ]
+    volumes:
+      - "$HOME/.config/whisper-server/models:/models"
+    devices:
+      - "/dev/dri:/dev/dri" # For GPU acceleration
+      - "/dev/kfd:/dev/kfd" # For AMD GPU acceleration
     ports:
       - "8080:8080"
 
   whisper-backend:
     image: ghcr.io/ggml-org/whisper.cpp:main-vulkan
     restart: unless-stopped
+    scale: 0
     entrypoint: [
         "/app/build/bin/whisper-server",
         # Host of the server
